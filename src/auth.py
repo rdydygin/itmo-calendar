@@ -65,7 +65,7 @@ async def get_access_token(session: ClientSession, username: str, password: str)
         allow_redirects=False,
     )
     if form_resp.status != 302:
-        raise ValueError(f"Wrong Keycloak form response: {form_resp.status} {await form_resp.text()}")
+        raise ValueError(f"ITMO login failed (HTTP {form_resp.status}); check credentials or interactive login requirements")
 
     url_redirected_to = form_resp.headers["Location"]
     query = urllib.parse.urlparse(url_redirected_to).query

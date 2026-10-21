@@ -8,3 +8,8 @@ __pycache__/
 *$py.class
 .ruff_cache
 .mypy_cache
+
+.env
+isu.env
+.venv/
+__pycache__/

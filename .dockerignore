@@ -1,0 +1,5 @@
+.git
+.venv
+.env
+isu.env
+**/__pycache__

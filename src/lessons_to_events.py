@@ -78,7 +78,7 @@ def raw_lesson_to_event(raw_lesson: dict) -> Event:
         location=_raw_lesson_to_location(raw_lesson),
         uid=_raw_lesson_to_uuid(raw_lesson),
     )
-    if raw_lesson["zoom_url"]:
+    if raw_lesson.get("zoom_url"):
         event.url = raw_lesson["zoom_url"]
 
     return event
