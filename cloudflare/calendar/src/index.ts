@@ -23,7 +23,6 @@ const PROVIDER = "https://id.itmo.ru/auth/realms/itmo";
 const API_BASE_URL = "https://my.itmo.ru/api";
 const UA = "Mozilla/5.0 (compatible; my-itmo-ru-to-ical)";
 const FRESH_MS = 30 * 60 * 1000;
-const CACHE_KEY = "calendar.ics";
 
 // ---------- auth (src/auth.py) ----------
 
@@ -227,12 +226,16 @@ async function calendarPath(env: Env): Promise<string> {
   return "/calendar/" + btoa(s).replace(/\+/g, "a").replace(/\//g, "b").replace(/=+$/, "");
 }
 
-async function refresh(env: Env): Promise<string> {
+async function refresh(env: Env, cacheKey: string): Promise<string> {
   const token = await getAccessToken(env.ISU_USERNAME, env.ISU_PASSWORD);
   const lessons = await getRawLessons(token);
   const ics = await buildCalendar(lessons);
-  await env.CACHE.put(CACHE_KEY, ics, { metadata: { fetchedAt: Date.now() } });
   console.log(`Refreshed calendar: ${lessons.length} events`);
+  try {
+    await env.CACHE.put(cacheKey, ics, { metadata: { fetchedAt: Date.now() } });
+  } catch (e) {
+    console.error("Saving the calendar to KV failed:", e); // still serve the fresh calendar
+  }
   return ics;
 }
 
@@ -247,17 +250,20 @@ export default {
     if (!env.ISU_USERNAME || !env.ISU_PASSWORD) {
       return new Response("ISU_USERNAME / ISU_PASSWORD secrets are not set", { status: 500 });
     }
-    if (new URL(request.url).pathname !== (await calendarPath(env))) {
+    const path = await calendarPath(env);
+    if (new URL(request.url).pathname !== path) {
       return new Response("not found", { status: 404 });
     }
 
-    const cached = await env.CACHE.getWithMetadata<{ fetchedAt: number }>(CACHE_KEY);
+    // Keyed by the credentials hash, so switching ISU accounts never serves the previous account's calendar.
+    const cacheKey = "ics:" + path;
+    const cached = await env.CACHE.getWithMetadata<{ fetchedAt: number }>(cacheKey);
     if (cached.value && cached.metadata && Date.now() - cached.metadata.fetchedAt < FRESH_MS) {
       return icsResponse(cached.value, "cache");
     }
 
     try {
-      return icsResponse(await refresh(env), "itmo");
+      return icsResponse(await refresh(env, cacheKey), "itmo");
     } catch (e) {
       console.error("Calendar refresh failed:", e);
       if (cached.value) return icsResponse(cached.value, "stale-cache");
