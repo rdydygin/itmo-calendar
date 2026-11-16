@@ -1,7 +1,10 @@
 # ITMO calendar on Cloudflare Workers (free plan)
 
-A TypeScript port of the Flask app in `src/`. It serves the same calendar at the same secret path
-(`/calendar/<hash of username+password>`) with the same event UIDs.
+A TypeScript port of the Flask app in `src/`. It serves the same calendar with the same event UIDs,
+so switching from the Docker version doesn't duplicate events.
+
+The URL is `/calendar/<CALENDAR_TOKEN>`, where the token is a random secret. Unlike the Docker
+version, it isn't derived from the ISU password, so a leaked link can't be used to guess the password.
 
 The last good calendar is kept in Workers KV:
 
@@ -22,27 +25,20 @@ bunx wrangler kv namespace create CACHE     # only for a new account: put the pr
 bunx wrangler deploy
 bunx wrangler secret put ISU_USERNAME
 bunx wrangler secret put ISU_PASSWORD
+TOKEN=$(openssl rand -hex 32); printf '%s' "$TOKEN" | bunx wrangler secret put CALENDAR_TOKEN; echo "$TOKEN"
 ```
 
 ## Calendar URL
 
 ```
-https://itmo-calendar.<your-subdomain>.workers.dev/calendar/<hash>
-```
-
-The hash is the same one the Docker version prints at startup (`URL path for calendar: ...`).
-To compute it yourself without leaving the password in shell history:
-
-```bash
-read -r ISU_U; read -rs ISU_P
-printf '%s%s' "$ISU_U" "$ISU_P" | openssl dgst -sha256 -binary | base64 | tr '+/' 'ab' | tr -d '='
-unset ISU_U ISU_P
+https://itmo-calendar.<your-subdomain>.workers.dev/calendar/<CALENDAR_TOKEN>
 ```
 
 Open the URL in a browser first: a `.ics` file should download.
 Then add it in Google Calendar: Other calendars → + → From URL.
 
-Changing the ISU username or password changes the URL.
+The URL only changes when you change `CALENDAR_TOKEN`. If the link leaks, set a new token and
+resubscribe; the ISU password doesn't need to change.
 
 ## Notes
 

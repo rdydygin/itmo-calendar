@@ -5,6 +5,7 @@
 interface Env {
   ISU_USERNAME: string;
   ISU_PASSWORD: string;
+  CALENDAR_TOKEN: string;
   CACHE: KVNamespace;
 }
 
@@ -218,14 +219,6 @@ async function buildCalendar(lessons: RawLesson[]): Promise<string> {
 
 // ---------- routing (src/app.py) ----------
 
-// Same path as the Python version: base64(sha256(username + password)) with "+/" -> "ab", no padding.
-async function calendarPath(env: Env): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(env.ISU_USERNAME + env.ISU_PASSWORD));
-  let s = "";
-  for (const b of new Uint8Array(digest)) s += String.fromCharCode(b);
-  return "/calendar/" + btoa(s).replace(/\+/g, "a").replace(/\//g, "b").replace(/=+$/, "");
-}
-
 async function refresh(env: Env, cacheKey: string): Promise<string> {
   const token = await getAccessToken(env.ISU_USERNAME, env.ISU_PASSWORD);
   const lessons = await getRawLessons(token);
@@ -247,16 +240,17 @@ function icsResponse(ics: string, source: string): Response {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (!env.ISU_USERNAME || !env.ISU_PASSWORD) {
-      return new Response("ISU_USERNAME / ISU_PASSWORD secrets are not set", { status: 500 });
+    if (!env.ISU_USERNAME || !env.ISU_PASSWORD || !env.CALENDAR_TOKEN) {
+      return new Response("ISU_USERNAME / ISU_PASSWORD / CALENDAR_TOKEN secrets are not set", { status: 500 });
     }
-    const path = await calendarPath(env);
-    if (new URL(request.url).pathname !== path) {
+    // The URL token is an independent random secret: deriving it from the password (as the Python
+    // version does) would let anyone holding the link test password guesses offline.
+    if (new URL(request.url).pathname !== "/calendar/" + env.CALENDAR_TOKEN) {
       return new Response("not found", { status: 404 });
     }
 
-    // Keyed by the credentials hash, so switching ISU accounts never serves the previous account's calendar.
-    const cacheKey = "ics:" + path;
+    // Keyed by the ISU account, so switching accounts never serves the previous account's calendar.
+    const cacheKey = "ics:" + env.ISU_USERNAME;
     let cached: { value: string | null; metadata: { fetchedAt: number } | null } = { value: null, metadata: null };
     try {
       cached = await env.CACHE.getWithMetadata<{ fetchedAt: number }>(cacheKey);
