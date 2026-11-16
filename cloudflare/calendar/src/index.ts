@@ -257,7 +257,12 @@ export default {
 
     // Keyed by the credentials hash, so switching ISU accounts never serves the previous account's calendar.
     const cacheKey = "ics:" + path;
-    const cached = await env.CACHE.getWithMetadata<{ fetchedAt: number }>(cacheKey);
+    let cached: { value: string | null; metadata: { fetchedAt: number } | null } = { value: null, metadata: null };
+    try {
+      cached = await env.CACHE.getWithMetadata<{ fetchedAt: number }>(cacheKey);
+    } catch (e) {
+      console.error("Reading the calendar from KV failed:", e); // fall through to ITMO
+    }
     if (cached.value && cached.metadata && Date.now() - cached.metadata.fetchedAt < FRESH_MS) {
       return icsResponse(cached.value, "cache");
     }
