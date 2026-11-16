@@ -1,3 +1,0 @@
-{$CALENDAR_DOMAIN} {
-    reverse_proxy calendar:35601
-}

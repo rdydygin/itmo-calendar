@@ -1,62 +1,105 @@
 # ITMO schedule to iCalendar converter
 
-Сервис, который ходит на my.itmo.ru за расписанием и экспортирует его как iCalendar с публичной ссылкой. Позволяет автоматически и с автообновлением экспортировать пары в календари Google, iCloud и другие.
+A Cloudflare Worker that exports your personal schedule from [my.itmo.ru](https://my.itmo.ru)
+as an iCalendar feed. Subscribe to the URL in Google Calendar, Apple Calendar, or another
+calendar app to receive schedule updates.
 
-## Что нужно
+The Worker uses ISU credentials stored as Cloudflare secrets and keeps the last successful
+calendar in Workers KV. Event UIDs are preserved when migrating from an older installation.
 
-Логин и пароль от ИСУ, поэтому безопасности ради захостить себе сервис придётся самостоятельно.
+## Deploy
 
-Нужен **личный** сервер (без доступа у посторонних) с `docker` на нём.
+You need [Bun](https://bun.sh), [Node.js 24 or newer](https://nodejs.org) to run Wrangler,
+and a Cloudflare account. Run these commands from the repository root:
 
-## Как завести
+```bash
+bun install --frozen-lockfile
+bun run wrangler login
+```
 
-1. Подставить username/password в команду и запустить контейнер:
+The KV namespace in [wrangler.jsonc](wrangler.jsonc) belongs to the existing deployment.
+For a new Cloudflare account, create a namespace and replace its `id` in `wrangler.jsonc`:
 
-   ```bash
-   APP_PORT=35601
+```bash
+bun run wrangler kv namespace create CACHE
+```
 
-   docker run -d \
-      --restart=unless-stopped \
-      --name itmo_ical \
-      -p=$APP_PORT:35601 \
-      -e ITMO_ICAL_ISU_USERNAME=100000 \
-      -e ITMO_ICAL_ISU_PASSWORD=XXXXXXXXXXXXX \
-      ghcr.io/iburakov/my-itmo-ru-to-ical
-   ```
+Deploy the Worker, then set its three secrets:
 
-2. Получить публичную ссылку на .ics:
+```bash
+bun run deploy
+bun run wrangler secret put ISU_USERNAME
+bun run wrangler secret put ISU_PASSWORD
+TOKEN=$(openssl rand -hex 32)
+printf '%s' "$TOKEN" | bun run wrangler secret put CALENDAR_TOKEN
+printf 'Calendar token: %s\n' "$TOKEN"
+```
 
-   ```bash
-   URL_PATH=$(docker logs itmo_ical 2>&1 | grep -oh '/calendar/.*')
-   HOST_IP=$(curl -s ipinfo.io/ip)
+The calendar is available once all three secrets are set:
 
-   echo "http://$HOST_IP:$APP_PORT$URL_PATH"
+```text
+https://itmo-calendar.<your-subdomain>.workers.dev/calendar/<CALENDAR_TOKEN>
+```
 
-   # должно выглядеть как-то так:
-   # http://93.184.216.34:35601/calendar/gnKZT88jeuKDdhh7Ow8mwsAbMpIyVKaCBpl2CtqJqYI
-   ```
+Open the URL first to check that it downloads an `.ics` file. In Google Calendar, choose
+**Other calendars → + → From URL** to subscribe. Calendar apps choose their own refresh
+interval; importing the file once does not subscribe to updates.
 
-3. Если по ссылке скачивается .ics файл, всё работает
-4. Импортировать ссылку в свой календарь. Он будет периодически повторять запрос для получения обновлений - изменяющиеся аудитории теперь не беда ;)
+The URL token is a random secret, independent of your ISU password. Anyone with the link
+can read the calendar. If it leaks, change `CALENDAR_TOKEN` and resubscribe. Changing ISU
+credentials alone does not change the URL.
 
-PS. Ссылка содержит хеш имени пользователя и пароля, чтобы она была и неподбираемой для посторонних, и относительно постоянной без использования какого-либо хранилища. Стоит иметь в виду, что меняется username/password - меняется ссылка.
+## Caching
 
-## Дополнительно
+- A calendar fetched less than 30 minutes ago is served from KV.
+- Otherwise, the Worker fetches a fresh calendar from ITMO.
+- If ITMO fails, the last successful calendar is served. With no cached calendar, the Worker returns HTTP 502.
 
-⚠ Пароль от ИСУ можно извлечь из контейнера с помощью `docker inspect` / `docker exec`. Безопасность своих ключей - ваша зона ответственности. Убедитесь, что:
+The `X-Calendar-Source` response header is `cache`, `itmo`, or `stale-cache`, respectively.
 
-- к серверу нет доступа у других людей,
-- включен фаервол,
-- отключена SSH авторизация по паролю и root login,
-- и.т.п.
+## Local development
 
-Docker образы собираются и пушатся в реестр с помощью GitHub Actions - исходники в этом репозитории, соответствующие скрипты сборки и логи общедоступны. Если всё равно стрёмно доверять пароль рандомному образу, можно склонировать репозиторий и сделать `docker build` из исходников самостоятельно.
+```bash
+bun install --frozen-lockfile
+cp .dev.vars.example .dev.vars
+```
 
-Также из коробки поддерживается мониторинг ошибок с помощью [Sentry](https://sentry.io/). Можно создать проект (Python/Flask) и передать [DSN](https://docs.sentry.io/product/sentry-basics/dsn-explainer/) в переменную окружения `ITMO_ICAL_SENTRY_DSN` при старте контейнера.
+Set `ISU_USERNAME`, `ISU_PASSWORD`, and a random `CALENDAR_TOKEN` in `.dev.vars`, then run:
 
-## Как помочь разработке/поддержке
+```bash
+bun run dev
+```
 
-Если какого-то функционала очень не хватает или что-то сломалось, PRs are welcome! Протестить вживую уже не смогу, но стараюсь находить время отсматривать и мержить. Используются:
+Visit `http://localhost:8787/calendar/<CALENDAR_TOKEN>`. Local development uses local KV;
+it does not read or write the production cache. `.dev.vars` is ignored by Git.
 
-- Python 3.11 + poetry
-- ruff, black, mypy, vulture в качестве линтеров/форматтеров
+```bash
+bun run check   # formatting and strict TypeScript checks, with generated Workers types
+bun run build   # bundle the Worker without deploying or requiring Cloudflare credentials
+bun run format  # format source, configuration, and documentation
+```
+
+Workers runtime and binding types are generated from `wrangler.jsonc` before each type check,
+following [Cloudflare's TypeScript guidance](https://developers.cloudflare.com/workers/languages/typescript/).
+Generated types, local state, dependencies, and build output are ignored by Git.
+
+## CI and automatic deployment
+
+Pull requests run formatting, TypeScript checks, and a Wrangler dry-run build using the
+committed Bun lockfile. Pushes to `main` run the same checks, then deploy the Worker.
+
+Configure these GitHub Actions repository secrets before using automatic deployment:
+
+- `CLOUDFLARE_API_TOKEN`: a Cloudflare API token with Workers deployment permissions
+  (the **Edit Cloudflare Workers** template).
+- `CLOUDFLARE_ACCOUNT_ID`: the account ID containing the Worker and its KV namespace.
+
+See [Cloudflare's GitHub Actions setup](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)
+for authentication details. `ISU_USERNAME`, `ISU_PASSWORD`, and `CALENDAR_TOKEN` remain Worker
+secrets set with Wrangler; CI does not need their values.
+
+## Operations
+
+View logs with `bun run wrangler tail` or in the Cloudflare dashboard under **Workers →
+itmo-calendar → Logs**. The schedule API covers the current academic year, August through July.
+Lesson times are converted from Moscow time to UTC; calendar apps display them in their own time zone.

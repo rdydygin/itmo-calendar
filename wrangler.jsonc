@@ -1,10 +1,9 @@
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "itmo-calendar",
   "main": "src/index.ts",
   "compatibility_date": "2025-09-01",
   "workers_dev": true,
   "observability": { "enabled": true },
-  "kv_namespaces": [
-    { "binding": "CACHE", "id": "72daebdeb98c49ecbc1b0bb58902e5a6" }
-  ]
+  "kv_namespaces": [{ "binding": "CACHE", "id": "72daebdeb98c49ecbc1b0bb58902e5a6" }],
 }

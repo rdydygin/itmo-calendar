@@ -1,12 +1,11 @@
-// Cloudflare Worker port of src/ (Flask app): ISU login -> personal schedule -> iCalendar feed.
+// Cloudflare Worker: ISU login -> personal schedule -> iCalendar feed.
 // The last good calendar is kept in KV: requests within FRESH_MS are served from it, and if ITMO
 // is down the stale copy is served instead of an error.
 
-interface Env {
+interface Env extends Cloudflare.Env {
   ISU_USERNAME: string;
   ISU_PASSWORD: string;
   CALENDAR_TOKEN: string;
-  CACHE: KVNamespace;
 }
 
 interface RawLesson {
@@ -25,7 +24,7 @@ const API_BASE_URL = "https://my.itmo.ru/api";
 const UA = "Mozilla/5.0 (compatible; my-itmo-ru-to-ical)";
 const FRESH_MS = 30 * 60 * 1000;
 
-// ---------- auth (src/auth.py) ----------
+// ---------- ISU authentication ----------
 
 function b64url(bytes: Uint8Array): string {
   let s = "";
@@ -43,9 +42,7 @@ function htmlUnescape(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
-const LOGIN_ACTION_RE = new RegExp(
-  `"loginAction":\\s*"(${PROVIDER.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}[^"]*)"`,
-);
+const LOGIN_ACTION_RE = new RegExp(`"loginAction":\\s*"(${PROVIDER.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}[^"]*)"`);
 
 async function getAccessToken(username: string, password: string): Promise<string> {
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(40))).replace(/[^a-zA-Z0-9]+/g, "");
@@ -102,7 +99,7 @@ async function getAccessToken(username: string, password: string): Promise<strin
   return token;
 }
 
-// ---------- schedule API (src/main_api.py) ----------
+// ---------- schedule API ----------
 
 async function getRawLessons(token: string): Promise<RawLesson[]> {
   const today = new Date();
@@ -117,10 +114,10 @@ async function getRawLessons(token: string): Promise<RawLesson[]> {
   return days.flatMap((day) => day.lessons.map((lesson) => ({ date: day.date, ...lesson }) as RawLesson));
 }
 
-// ---------- lesson -> event (src/lessons_to_events.py) ----------
+// ---------- lesson -> event ----------
 
 const LESSON_TYPE_TAGS: Record<string, string> = {
-  "Лекции": "Лек",
+  Лекции: "Лек",
   "Практические занятия": "Прак",
   "Лабораторные занятия": "Лаб",
   "Занятия спортом": "Спорт",
@@ -148,17 +145,22 @@ function location(lesson: RawLesson): string | null {
   return place || null;
 }
 
-// Same UID as the Python version: UUID formatted md5 of "date, time_start, subject".
+// Preserve existing event UIDs: UUID formatted md5 of "date, time_start, subject".
 async function uid(lesson: RawLesson): Promise<string> {
   const data = new TextEncoder().encode(`${lesson.date}, ${lesson.time_start}, ${lesson.subject}`);
-  const hex = [...new Uint8Array(await crypto.subtle.digest("MD5", data))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const hex = [...new Uint8Array(await crypto.subtle.digest("MD5", data))]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 // ---------- iCalendar serialization (RFC 5545) ----------
 
 function icsDate(ms: number): string {
-  return new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""); // 20260901T060000Z
+  return new Date(ms)
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, ""); // 20260901T060000Z
 }
 
 function icsText(s: string): string {
@@ -217,7 +219,7 @@ async function buildCalendar(lessons: RawLesson[]): Promise<string> {
   return lines.map(fold).join("\r\n") + "\r\n";
 }
 
-// ---------- routing (src/app.py) ----------
+// ---------- routing ----------
 
 async function refresh(env: Env, cacheKey: string): Promise<string> {
   const token = await getAccessToken(env.ISU_USERNAME, env.ISU_PASSWORD);
@@ -234,7 +236,11 @@ async function refresh(env: Env, cacheKey: string): Promise<string> {
 
 function icsResponse(ics: string, source: string): Response {
   return new Response(ics, {
-    headers: { "Content-Type": "text/calendar; charset=utf-8", "Cache-Control": "no-store", "X-Calendar-Source": source },
+    headers: {
+      "Content-Type": "text/calendar; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Calendar-Source": source,
+    },
   });
 }
 
@@ -243,8 +249,8 @@ export default {
     if (!env.ISU_USERNAME || !env.ISU_PASSWORD || !env.CALENDAR_TOKEN) {
       return new Response("ISU_USERNAME / ISU_PASSWORD / CALENDAR_TOKEN secrets are not set", { status: 500 });
     }
-    // The URL token is an independent random secret: deriving it from the password (as the Python
-    // version does) would let anyone holding the link test password guesses offline.
+    // The URL token is an independent random secret: deriving it from the password
+    // would let anyone holding the link test password guesses offline.
     if (new URL(request.url).pathname !== "/calendar/" + env.CALENDAR_TOKEN) {
       return new Response("not found", { status: 404 });
     }
@@ -269,4 +275,4 @@ export default {
       return new Response("Failed to fetch the schedule from ITMO", { status: 502 });
     }
   },
-};
+} satisfies ExportedHandler<Env>;

@@ -1,0 +1,27 @@
+{
+  "name": "itmo-calendar",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Export the personal schedule from my.itmo.ru as an iCalendar feed on Cloudflare Workers.",
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "cf-typegen": "wrangler types",
+    "typecheck": "bun run cf-typegen && tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "bun run format:check && bun run typecheck"
+  },
+  "devDependencies": {
+    "prettier": "3.10.1",
+    "typescript": "7.0.2",
+    "wrangler": "4.162.0"
+  }
+}

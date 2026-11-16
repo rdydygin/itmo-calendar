@@ -1,0 +1,4 @@
+bun.lock
+dist/
+.wrangler/
+worker-configuration.d.ts
